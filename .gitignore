@@ -1,0 +1,22 @@
+# Backend
+backend/vaultimator_backend
+backend/data/
+backend/logs/
+# backend/config.yaml
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

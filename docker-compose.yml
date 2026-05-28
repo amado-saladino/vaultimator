@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - vaultimator_data:/app/data
+      - vaultimator_logs:/app/logs
+    ports:
+      - "8080:8080" # Exposed locally for direct access if needed, but nginx proxies it anyway
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  vaultimator_data:
+  vaultimator_logs:

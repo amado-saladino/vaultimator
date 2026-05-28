@@ -1,0 +1,7 @@
+server:
+  port: 8080
+storage:
+  data_file_name: data/vault_data.enc
+  master_password_file_name: data/master.hash
+security:
+  session_duration_minutes: 60
