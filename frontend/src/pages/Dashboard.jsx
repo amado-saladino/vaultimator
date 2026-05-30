@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { Folder, FolderPlus, Key, Settings, Search, Plus, LogOut, Shield } from 'lucide-react';
+import { Folder, FolderPlus, Key, Settings, Search, Plus, LogOut, Shield, MoreVertical, Trash2, Edit2, X } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import api from '../api';
 
@@ -15,6 +15,9 @@ export default function Dashboard({ onLogout }) {
   const [loading, setLoading] = useState(true);
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [renamingFolderId, setRenamingFolderId] = useState(null);
+  const [renamingFolderName, setRenamingFolderName] = useState('');
+  const [openFolderMenuId, setOpenFolderMenuId] = useState(null);
   
   const navigate = useNavigate();
   const location = useLocation();
@@ -54,6 +57,54 @@ export default function Dashboard({ onLogout }) {
       addToast(`Folder "${newFolderName.trim()}" created`, 'success');
     } catch (err) {
       addToast('Failed to create folder', 'error');
+    }
+  };
+
+  const handleRenameFolder = async (folderId, newName) => {
+    if (!newName.trim()) return;
+    try {
+      const newData = {
+        ...data,
+        folders: data.folders.map(f => 
+          f.id === folderId ? { ...f, name: newName.trim(), updated_at: new Date() } : f
+        )
+      };
+      await api.put('/data', newData);
+      await fetchData();
+      setRenamingFolderId(null);
+      setRenamingFolderName('');
+      addToast('Folder renamed successfully', 'success');
+    } catch (err) {
+      addToast('Failed to rename folder', 'error');
+    }
+  };
+
+  const handleDeleteFolder = async (folderId) => {
+    // Check if folder contains any items
+    const itemsInFolder = [
+      ...(data.passwords || []).filter(p => p.folder_id === folderId),
+      ...(data.secret_notes || []).filter(n => n.folder_id === folderId)
+    ];
+
+    if (itemsInFolder.length > 0) {
+      addToast(`Cannot delete folder: it contains ${itemsInFolder.length} item(s). Please move or delete items first.`, 'warning');
+      return;
+    }
+
+    try {
+      const newData = {
+        ...data,
+        folders: data.folders.filter(f => f.id !== folderId)
+      };
+      await api.put('/data', newData);
+      await fetchData();
+      if (activeFolder === folderId) {
+        setActiveFolder(null);
+      }
+      setOpenFolderMenuId(null);
+      addToast('Folder deleted successfully', 'success');
+    } catch (err) {
+      addToast('Failed to delete folder', 'error');
     }
   };
 
@@ -109,7 +160,10 @@ export default function Dashboard({ onLogout }) {
                   value={newFolderName} 
                   onChange={(e) => setNewFolderName(e.target.value)} 
                   placeholder="Folder name" 
-                  onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleCreateFolder();
+                    if (e.key === 'Escape') setShowNewFolder(false);
+                  }}
                   autoFocus
                   style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
                 />
@@ -120,13 +174,87 @@ export default function Dashboard({ onLogout }) {
             )}
 
             {data.folders.map(f => (
-              <NavItem 
-                key={f.id} 
-                icon={<Folder size={18} />} 
-                label={f.name} 
-                active={activeFolder === f.id}
-                onClick={() => { setActiveFolder(f.id); navigate('/dashboard'); }}
-              />
+              <div key={f.id} style={{ position: 'relative' }}>
+                {renamingFolderId === f.id ? (
+                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.25rem', paddingLeft: '0.25rem', paddingRight: '0.25rem' }}>
+                    <input 
+                      value={renamingFolderName} 
+                      onChange={(e) => setRenamingFolderName(e.target.value)} 
+                      placeholder="Folder name" 
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleRenameFolder(f.id, renamingFolderName);
+                        if (e.key === 'Escape') setRenamingFolderId(null);
+                      }}
+                      autoFocus
+                      style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem', flex: 1 }}
+                    />
+                    <button 
+                      className="btn btn-primary" 
+                      onClick={() => handleRenameFolder(f.id, renamingFolderName)} 
+                      style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem' }}
+                    >
+                      Done
+                    </button>
+                  </div>
+                ) : (
+                  <div 
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative' }}
+                    onMouseEnter={() => setOpenFolderMenuId(f.id)}
+                    onMouseLeave={() => setOpenFolderMenuId(null)}
+                  >
+                    <NavItem 
+                      icon={<Folder size={18} />} 
+                      label={f.name} 
+                      active={activeFolder === f.id}
+                      onClick={() => { setActiveFolder(f.id); navigate('/dashboard'); }}
+                      style={{ flex: 1 }}
+                    />
+                    {openFolderMenuId === f.id && (
+                      <div style={{ display: 'flex', gap: '0.25rem', marginRight: '0.5rem' }}>
+                        <button
+                          onClick={() => {
+                            setRenamingFolderId(f.id);
+                            setRenamingFolderName(f.name);
+                            setOpenFolderMenuId(null);
+                          }}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: 'var(--text-muted)',
+                            padding: '4px',
+                            borderRadius: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            hover: { backgroundColor: 'rgba(255,255,255,0.1)' }
+                          }}
+                          title="Rename folder"
+                        >
+                          <Edit2 size={14} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteFolder(f.id)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: 'var(--text-danger)',
+                            padding: '4px',
+                            borderRadius: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}
+                          title="Delete folder"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>

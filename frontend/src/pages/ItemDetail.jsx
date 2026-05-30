@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Save, Trash, RefreshCw, Eye, EyeOff, Copy } from 'lucide-react';
+import { ArrowLeft, Save, Trash, RefreshCw, Eye, EyeOff, Copy, Folder } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import api from '../api';
 
@@ -18,7 +18,8 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
     username: '',
     password: '',
     website: '',
-    note: ''
+    note: '',
+    folder_id: ''
   });
   const [loading, setLoading] = useState(false);
 
@@ -37,7 +38,8 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
           username: item.username || '',
           password: item.password || '',
           website: item.website || '',
-          note: item.note || ''
+          note: item.note || '',
+          folder_id: item.folder_id || ''
         });
       }
     }
@@ -75,9 +77,9 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
       
       if (isNew) {
         if (type === 'password') {
-          newData.passwords = [...(newData.passwords || []), { ...form, id: generateId(), created_at: new Date() }];
+          newData.passwords = [...(newData.passwords || []), { ...form, id: generateId(), created_at: new Date(), updated_at: new Date() }];
         } else {
-          newData.secret_notes = [...(newData.secret_notes || []), { ...form, id: generateId(), created_at: new Date() }];
+          newData.secret_notes = [...(newData.secret_notes || []), { ...form, id: generateId(), created_at: new Date(), updated_at: new Date() }];
         }
       } else {
         if (type === 'password') {
@@ -152,6 +154,34 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
         <div>
           <label>Title</label>
           <input name="title" value={form.title} onChange={handleChange} placeholder="e.g. Gmail" autoFocus />
+        </div>
+
+        <div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Folder size={16} /> Folder
+          </label>
+          <select 
+            name="folder_id" 
+            value={form.folder_id} 
+            onChange={handleChange}
+            style={{ 
+              width: '100%',
+              padding: '0.6rem',
+              borderRadius: 'var(--border-radius-sm)',
+              backgroundColor: 'var(--bg-surface)',
+              border: '1px solid var(--border-color)',
+              color: 'var(--text-primary)',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="">No Folder (Uncategorized)</option>
+            {(data.folders || []).map(f => (
+              <option key={f.id} value={f.id}>{f.name}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+            Organize this item into a folder
+          </div>
         </div>
 
         {type === 'password' && (
