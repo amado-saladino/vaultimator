@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -66,6 +67,9 @@ func (a *App) SetupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/setup", a.HandleSetup)
 	mux.HandleFunc("/api/login", a.HandleLogin)
 	mux.HandleFunc("/api/generate", a.HandleGeneratePassword)
+	mux.HandleFunc("/api/export", a.HandleExport)
+	mux.HandleFunc("/api/import", a.HandleImport)
+	mux.HandleFunc("/api/change-password", a.HandleChangePassword)
 
 	// Protected routes
 	mux.HandleFunc("/api/data", a.requireAuth(a.HandleData))
@@ -297,4 +301,319 @@ func (a *App) HandleDestroy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, map[string]string{"message": "All data destroyed successfully"})
+}
+
+// HandleExport exports encrypted backup file using a separate passphrase
+func (a *App) HandleExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		MasterPassword string `json:"master_password"`
+		Passphrase     string `json:"passphrase"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.MasterPassword == "" {
+		sendError(w, http.StatusBadRequest, "Master password is required")
+		return
+	}
+
+	if req.Passphrase == "" {
+		sendError(w, http.StatusBadRequest, "Backup passphrase is required")
+		return
+	}
+
+	// Verify master password against stored hash
+	hash, err := storage.ReadMasterHash(a.Config.Storage.MasterPasswordFileName)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to verify password")
+		return
+	}
+
+	valid, err := crypto.VerifyPassword(req.MasterPassword, hash)
+	if err != nil || !valid {
+		sendError(w, http.StatusUnauthorized, "Invalid master password")
+		return
+	}
+
+	// Extract salt from master password hash and derive key to read vault
+	salt, err := crypto.ExtractSalt(hash)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to extract salt")
+		return
+	}
+
+	// Derive key from master password to decrypt vault data
+	vaultKey := crypto.DeriveKey(req.MasterPassword, salt)
+
+	// Read vault data (decrypted with master password key)
+	vaultData, err := storage.ReadVaultData(a.Config.Storage.DataFileName, vaultKey)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to read vault data")
+		return
+	}
+
+	// Create backup structure with metadata
+	backup := map[string]interface{}{
+		"version":     "1.0",
+		"exported_at": time.Now().UTC().Format(time.RFC3339),
+		"vault_data":  vaultData,
+	}
+
+	// Marshal backup to JSON
+	backupJSON, err := json.Marshal(backup)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to marshal backup")
+		return
+	}
+
+	// Derive portable backup encryption key from passphrase (not master password)
+	// This allows same backup to be imported on any node with same passphrase
+	backupKey := crypto.DeriveKeyPortable(req.Passphrase)
+
+	// Encrypt entire backup with portable passphrase key
+	encryptedBackup, err := crypto.Encrypt(backupJSON, backupKey)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to encrypt backup")
+		return
+	}
+
+	// Send as binary encrypted file
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="vaultimator-backup-encrypted.vault"`)
+	w.WriteHeader(http.StatusOK)
+	w.Write(encryptedBackup)
+}
+
+// HandleImport imports encrypted backup and saves vault data
+func (a *App) HandleImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		MasterPassword string `json:"master_password"`
+		Passphrase     string `json:"passphrase"`
+		EncryptedData  string `json:"encrypted_data"` // Base64 encoded encrypted backup
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.MasterPassword == "" {
+		sendError(w, http.StatusBadRequest, "Master password is required")
+		return
+	}
+
+	if req.Passphrase == "" {
+		sendError(w, http.StatusBadRequest, "Backup passphrase is required")
+		return
+	}
+
+	if req.EncryptedData == "" {
+		sendError(w, http.StatusBadRequest, "Encrypted data is required")
+		return
+	}
+
+	// Verify master password
+	hash, err := storage.ReadMasterHash(a.Config.Storage.MasterPasswordFileName)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to verify password")
+		return
+	}
+
+	valid, err := crypto.VerifyPassword(req.MasterPassword, hash)
+	if err != nil || !valid {
+		sendError(w, http.StatusUnauthorized, "Invalid master password")
+		return
+	}
+
+	// Extract salt from master password hash and derive key to write vault
+	salt, err := crypto.ExtractSalt(hash)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to extract salt")
+		return
+	}
+
+	// Derive key from master password to encrypt vault data with current password
+	vaultKey := crypto.DeriveKey(req.MasterPassword, salt)
+
+	// Decode base64 encrypted data
+	encryptedBackup, err := base64.StdEncoding.DecodeString(req.EncryptedData)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid encrypted data format")
+		return
+	}
+
+	// Derive portable key from passphrase to decrypt backup
+	backupKey := crypto.DeriveKeyPortable(req.Passphrase)
+
+	// Decrypt backup with passphrase
+	decryptedBackup, err := crypto.Decrypt(encryptedBackup, backupKey)
+	if err != nil {
+		sendError(w, http.StatusUnauthorized, "Failed to decrypt backup - invalid passphrase or corrupted file")
+		return
+	}
+
+	// Parse backup JSON
+	var backup map[string]interface{}
+	if err := json.Unmarshal(decryptedBackup, &backup); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid backup file format")
+		return
+	}
+
+	// Validate backup structure
+	if _, ok := backup["version"]; !ok {
+		sendError(w, http.StatusBadRequest, "Invalid backup file - missing version")
+		return
+	}
+
+	// Extract vault data
+	vaultDataRaw, ok := backup["vault_data"]
+	if !ok {
+		sendError(w, http.StatusBadRequest, "Invalid backup file - missing vault_data")
+		return
+	}
+
+	// Marshal vault data back to JSON and unmarshal to VaultData struct
+	vaultDataJSON, err := json.Marshal(vaultDataRaw)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid vault_data in backup")
+		return
+	}
+
+	var vaultData models.VaultData
+	if err := json.Unmarshal(vaultDataJSON, &vaultData); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid vault data structure")
+		return
+	}
+
+	// Save imported vault data (encrypted with current master password)
+	vaultData.UpdatedAt = time.Now()
+	if err := storage.WriteVaultData(a.Config.Storage.DataFileName, vaultKey, &vaultData); err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to save imported data")
+		return
+	}
+
+	// Create a new session for the user
+	token := CreateToken()
+	a.mu.Lock()
+	a.Sessions[token] = Session{
+		Key:       vaultKey,
+		ExpiresAt: time.Now().Add(time.Duration(a.Config.Security.SessionDurationMinutes) * time.Minute),
+	}
+	a.mu.Unlock()
+
+	sendJSON(w, http.StatusOK, map[string]string{
+		"message": "Backup imported successfully",
+		"token":   token,
+	})
+}
+
+// HandleChangePassword changes the master password
+func (a *App) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.CurrentPassword == "" {
+		sendError(w, http.StatusBadRequest, "Current password is required")
+		return
+	}
+
+	if req.NewPassword == "" {
+		sendError(w, http.StatusBadRequest, "New password is required")
+		return
+	}
+
+	// Validate new password strength
+	if err := crypto.ValidateMasterPassword(req.NewPassword); err != nil {
+		sendError(w, http.StatusBadRequest, "New password: "+err.Error())
+		return
+	}
+
+	// Verify current password
+	oldHash, err := storage.ReadMasterHash(a.Config.Storage.MasterPasswordFileName)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to verify password")
+		return
+	}
+
+	valid, err := crypto.VerifyPassword(req.CurrentPassword, oldHash)
+	if err != nil || !valid {
+		sendError(w, http.StatusUnauthorized, "Invalid current password")
+		return
+	}
+
+	// Extract salt and derive key to read vault data
+	oldSalt, err := crypto.ExtractSalt(oldHash)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to extract salt")
+		return
+	}
+
+	oldKey := crypto.DeriveKey(req.CurrentPassword, oldSalt)
+
+	// Read vault data with old key
+	vaultData, err := storage.ReadVaultData(a.Config.Storage.DataFileName, oldKey)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to read vault data")
+		return
+	}
+
+	// Hash new password
+	newHash, err := crypto.HashPassword(req.NewPassword)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to hash new password")
+		return
+	}
+
+	// Extract new salt and derive new key
+	newSalt, err := crypto.ExtractSalt(newHash)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to extract new salt")
+		return
+	}
+
+	newKey := crypto.DeriveKey(req.NewPassword, newSalt)
+
+	// Re-encrypt vault data with new key
+	vaultData.UpdatedAt = time.Now()
+	if err := storage.WriteVaultData(a.Config.Storage.DataFileName, newKey, vaultData); err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to save vault data")
+		return
+	}
+
+	// Save new password hash
+	if err := storage.WriteMasterHash(a.Config.Storage.MasterPasswordFileName, newHash); err != nil {
+		sendError(w, http.StatusInternalServerError, "Failed to save new password hash")
+		return
+	}
+
+	// Invalidate all existing sessions
+	a.mu.Lock()
+	a.Sessions = make(map[string]Session)
+	a.mu.Unlock()
+
+	sendJSON(w, http.StatusOK, map[string]string{
+		"message": "Master password changed successfully. Please log in again.",
+	})
 }

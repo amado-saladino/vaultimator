@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"unicode"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // Argon2 parameters
@@ -105,6 +107,19 @@ func subtleConstantTimeCompare(x, y []byte) int {
 // The same salt MUST be used for subsequent derivations to retrieve the same key.
 func DeriveKey(password string, salt []byte) []byte {
 	return argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, 32)
+}
+
+// DeriveKeyPortable derives a 32-byte encryption key using PBKDF2 with a fixed salt.
+// This allows the same password to produce the same key on any node (for cross-node backups).
+// DO NOT change this function or the salt - it will break all existing portable backups!
+func DeriveKeyPortable(password string) []byte {
+	// Fixed salt for portable backups - MUST NEVER CHANGE
+	// This salt is used consistently across all nodes for backup encryption
+	fixedSalt := []byte("vaultimator-backup-portable-salt-v1")
+	
+	// PBKDF2 with SHA-256: 100,000 iterations
+	// This ensures the same password produces the same key on any node
+	return pbkdf2.Key([]byte(password), fixedSalt, 100000, 32, sha256.New)
 }
 
 // ValidateMasterPassword enforces strong password requirements:
