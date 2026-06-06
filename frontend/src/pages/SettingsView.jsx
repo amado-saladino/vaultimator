@@ -22,6 +22,12 @@ export default function SettingsView() {
   const [exportPassphrase, setExportPassphrase] = useState('');
   const [exportPasswordError, setExportPasswordError] = useState('');
   const [showExportPasswordField, setShowExportPasswordField] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changePasswordError, setChangePasswordError] = useState('');
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false);
   const fileInputRef = useRef(null);
   const navigate = useNavigate();
   const addToast = useToast();
@@ -36,6 +42,67 @@ export default function SettingsView() {
   const handleSaveTimeout = () => {
     localStorage.setItem('vault_timeout_minutes', timeoutMinutes);
     addToast('Auto-logout timeout updated successfully!', 'success');
+  };
+
+  const handleChangePassword = async () => {
+    // Validation
+    if (!currentPassword.trim()) {
+      setChangePasswordError('Please enter your current password');
+      return;
+    }
+
+    if (!newPassword.trim()) {
+      setChangePasswordError('Please enter a new password');
+      return;
+    }
+
+    if (newPassword.length < 12) {
+      setChangePasswordError('New password must be at least 12 characters');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setChangePasswordError('Passwords do not match');
+      return;
+    }
+
+    if (newPassword === currentPassword) {
+      setChangePasswordError('New password must be different from current password');
+      return;
+    }
+
+    setChangePasswordLoading(true);
+    setChangePasswordError('');
+
+    try {
+      const response = await api.post('/change-password', {
+        current_password: currentPassword,
+        new_password: newPassword
+      });
+
+      addToast('✅ Master password changed successfully! Please log in again.', 'success');
+      
+      // Clear session and redirect to login
+      localStorage.removeItem('vault_token');
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 2000);
+    } catch (err) {
+      console.error('Change password error:', err);
+      let errorMsg = 'Failed to change password';
+      
+      if (err.response?.status === 401) {
+        errorMsg = 'Invalid current password';
+      } else if (err.response?.data?.error) {
+        errorMsg = err.response.data.error;
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+      
+      setChangePasswordError(errorMsg);
+    } finally {
+      setChangePasswordLoading(false);
+    }
   };
 
   const handleExport = async () => {
@@ -208,7 +275,7 @@ export default function SettingsView() {
           <Clock size={20} color="var(--accent-primary)" /> Security Options
         </h3>
         
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '1rem', marginBottom: '2rem' }}>
           <div style={{ flex: 1 }}>
             <label>Auto-Logout Timeout (minutes)</label>
             <input 
@@ -221,9 +288,157 @@ export default function SettingsView() {
           </div>
           <button className="btn btn-primary" onClick={handleSaveTimeout}>Save</button>
         </div>
-        <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+        <p style={{ marginBottom: '1.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
           The vault will automatically lock after this period of inactivity.
         </p>
+
+        {/* Change Master Password Button */}
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '1.5rem' }}>
+          <button 
+            className="btn btn-secondary" 
+            onClick={() => {
+              setShowChangePassword(true);
+              setCurrentPassword('');
+              setNewPassword('');
+              setConfirmPassword('');
+              setChangePasswordError('');
+            }}
+            style={{ width: '100%' }}
+          >
+            🔑 Change Master Password
+          </button>
+          <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            Change the master password that unlocks your vault. You'll be logged out after changing.
+          </p>
+        </div>
+
+        {/* Change Password Modal */}
+        {showChangePassword && (
+          <div className="animate-fade-in" style={{ 
+            marginTop: '1.5rem',
+            padding: '1.5rem', 
+            backgroundColor: 'rgba(99, 102, 241, 0.05)', 
+            borderRadius: 'var(--border-radius-sm)', 
+            border: '1px solid rgba(99, 102, 241, 0.2)'
+          }}>
+            <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }}>
+              <AlertCircle size={20} color="var(--accent-warning)" style={{ flexShrink: 0 }} />
+              <div>
+                <p style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>
+                  Change Master Password
+                </p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  Enter your current password, then set a new one. You'll need to log in again with your new password.
+                  <br />
+                  <span style={{ fontSize: '0.75rem', color: 'var(--accent-warning)', marginTop: '0.5rem', display: 'block' }}>
+                    ⚠️ New password must be at least 12 characters and different from current password.
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  Current Master Password
+                </label>
+                <input 
+                  type="password" 
+                  placeholder="Enter current password" 
+                  value={currentPassword}
+                  onChange={(e) => {
+                    setCurrentPassword(e.target.value);
+                    setChangePasswordError('');
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setShowChangePassword(false);
+                      setCurrentPassword('');
+                      setNewPassword('');
+                      setConfirmPassword('');
+                      setChangePasswordError('');
+                    }
+                  }}
+                  autoFocus
+                  style={{ marginTop: '0.25rem' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  New Master Password
+                </label>
+                <input 
+                  type="password" 
+                  placeholder="Enter new password (12+ characters)" 
+                  value={newPassword}
+                  onChange={(e) => {
+                    setNewPassword(e.target.value);
+                    setChangePasswordError('');
+                  }}
+                  style={{ marginTop: '0.25rem' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  Confirm New Password
+                </label>
+                <input 
+                  type="password" 
+                  placeholder="Confirm new password" 
+                  value={confirmPassword}
+                  onChange={(e) => {
+                    setConfirmPassword(e.target.value);
+                    setChangePasswordError('');
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !changePasswordLoading && currentPassword.trim() && newPassword.trim() && confirmPassword.trim()) {
+                      handleChangePassword();
+                    }
+                    if (e.key === 'Escape') {
+                      setShowChangePassword(false);
+                      setCurrentPassword('');
+                      setNewPassword('');
+                      setConfirmPassword('');
+                      setChangePasswordError('');
+                    }
+                  }}
+                  style={{ marginTop: '0.25rem' }}
+                />
+              </div>
+
+              {changePasswordError && (
+                <div style={{ color: 'var(--accent-danger)', fontSize: '0.8rem' }}>
+                  ❌ {changePasswordError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button 
+                  className="btn btn-ghost" 
+                  onClick={() => {
+                    setShowChangePassword(false);
+                    setCurrentPassword('');
+                    setNewPassword('');
+                    setConfirmPassword('');
+                    setChangePasswordError('');
+                  }}
+                  disabled={changePasswordLoading}
+                >
+                  Cancel
+                </button>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={handleChangePassword}
+                  disabled={changePasswordLoading || !currentPassword.trim() || !newPassword.trim() || !confirmPassword.trim()}
+                >
+                  {changePasswordLoading ? 'Changing Password...' : 'Change Password'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Import / Export */}
