@@ -13,6 +13,8 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
 
   const [type, setType] = useState(initialType);
   const [showPassword, setShowPassword] = useState(false);
+  const [passwordLength, setPasswordLength] = useState(16);
+  const [showLengthPanel, setShowLengthPanel] = useState(false);
   const [form, setForm] = useState({
     title: '',
     username: '',
@@ -51,9 +53,16 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
 
   const generatePassword = async () => {
     try {
-      const res = await api.post('/generate', { length: 16, include_upper: true, include_lower: true, include_numbers: true, include_special: true });
+      const res = await api.post('/generate', { 
+        length: passwordLength, 
+        include_upper: true, 
+        include_lower: true, 
+        include_numbers: true, 
+        include_special: true 
+      });
       setForm({ ...form, password: res.data.password });
-      addToast('Password generated', 'success');
+      addToast(`✅ Password generated (${passwordLength} characters)`, 'success');
+      setShowLengthPanel(false);
     } catch (err) {
       addToast('Failed to generate password', 'error');
     }
@@ -197,7 +206,83 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
             </div>
             
             <div>
-              <label>Password</label>
+              <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <span>Password</span>
+                <button 
+                  className="btn btn-link"
+                  onClick={() => setShowLengthPanel(!showLengthPanel)}
+                  style={{ 
+                    padding: '0.25rem 0.5rem',
+                    fontSize: '0.8rem',
+                    color: 'var(--accent-primary)'
+                  }}
+                >
+                  {showLengthPanel ? '▼ Hide Length' : '▶ Password Length'}
+                </button>
+              </label>
+
+              {showLengthPanel && (
+                <div style={{
+                  padding: '1rem',
+                  backgroundColor: 'rgba(99, 102, 241, 0.05)',
+                  border: '1px solid rgba(99, 102, 241, 0.2)',
+                  borderRadius: 'var(--border-radius-sm)',
+                  marginBottom: '1rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <label style={{ fontSize: '0.85rem', fontWeight: 600 }}>Select Length</label>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-primary)' }}>
+                      {passwordLength} characters
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="12"
+                    max="30"
+                    value={passwordLength}
+                    onChange={(e) => setPasswordLength(Number(e.target.value))}
+                    style={{ 
+                      width: '100%', 
+                      cursor: 'pointer',
+                      marginBottom: '0.5rem'
+                    }}
+                  />
+                  <div style={{ 
+                    fontSize: '0.7rem', 
+                    color: 'var(--text-muted)', 
+                    display: 'flex', 
+                    justifyContent: 'space-between',
+                    marginBottom: '1rem'
+                  }}>
+                    <span>12 (Min)</span>
+                    <span>30 (Max)</span>
+                  </div>
+
+                  <div style={{ 
+                    padding: '0.75rem',
+                    backgroundColor: passwordLength >= 20 ? 'rgba(16, 185, 129, 0.1)' : passwordLength >= 16 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                    border: `1px solid ${passwordLength >= 20 ? 'rgba(16, 185, 129, 0.3)' : passwordLength >= 16 ? 'rgba(245, 158, 11, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                    borderRadius: 'var(--border-radius-sm)',
+                    marginBottom: '1rem',
+                    fontSize: '0.8rem',
+                    color: 'var(--text-secondary)'
+                  }}>
+                    {passwordLength >= 20 && '✅ Strong security (20+ characters)'}
+                    {passwordLength >= 16 && passwordLength < 20 && '⚠️ Good security (16-19 characters) - Recommended'}
+                    {passwordLength < 16 && '❌ Minimum security (12-15 characters)'}
+                  </div>
+
+                  <button 
+                    className="btn btn-primary"
+                    onClick={generatePassword}
+                    style={{ width: '100%' }}
+                  >
+                    <RefreshCw size={16} style={{ marginRight: '0.5rem' }} />
+                    Generate {passwordLength}-Character Password
+                  </button>
+                </div>
+              )}
+              
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <input name="password" type={showPassword ? 'text' : 'password'} value={form.password} onChange={handleChange} />
                 <button className="btn btn-ghost" onClick={() => setShowPassword(!showPassword)} title={showPassword ? 'Hide password' : 'Show password'} style={{ border: '1px solid var(--border-color)', flexShrink: 0 }}>
@@ -206,7 +291,7 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
                 <button className="btn btn-ghost" onClick={() => copyToClipboard(form.password, 'Password')} title="Copy password" style={{ border: '1px solid var(--border-color)', flexShrink: 0 }}>
                   <Copy size={18} />
                 </button>
-                <button className="btn btn-ghost" onClick={generatePassword} title="Generate password" style={{ border: '1px solid var(--border-color)', flexShrink: 0 }}>
+                <button className="btn btn-ghost" onClick={() => setShowLengthPanel(true)} title="Generate password" style={{ border: '1px solid var(--border-color)', flexShrink: 0 }}>
                   <RefreshCw size={18} />
                 </button>
               </div>
