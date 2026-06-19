@@ -1,8 +1,65 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Save, Trash, RefreshCw, Eye, EyeOff, Copy, Folder } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import api from '../api';
+
+// CSS styles for password length slider
+const sliderStyles = `
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.2);
+    outline: none;
+    -webkit-slider-thumb-appearance: none;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent-primary, #6366f1);
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    border: 2px solid white;
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent-primary, #6366f1);
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    border: 2px solid white;
+  }
+
+  input[type="range"]::-moz-range-track {
+    background: transparent;
+    border: none;
+  }
+
+  input[type="range"]::-webkit-slider-runnable-track {
+    background: rgba(0, 0, 0, 0.2);
+    height: 6px;
+    border-radius: 3px;
+  }
+`;
+
+// Inject styles into document
+if (typeof document !== 'undefined') {
+  const styleElement = document.createElement('style');
+  styleElement.textContent = sliderStyles;
+  if (!document.head.querySelector('style[data-slider-styles]')) {
+    styleElement.setAttribute('data-slider-styles', 'true');
+    document.head.appendChild(styleElement);
+  }
+}
 
 export default function ItemDetail({ data, isNew, onUpdate }) {
   const navigate = useNavigate();
@@ -244,7 +301,14 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
                     style={{ 
                       width: '100%', 
                       cursor: 'pointer',
-                      marginBottom: '0.5rem'
+                      marginBottom: '0.5rem',
+                      boxSizing: 'border-box',
+                      padding: '0px',
+                      margin: '0px',
+                      height: '6px',
+                      WebkitAppearance: 'none',
+                      appearance: 'none',
+                      background: 'transparent'
                     }}
                   />
                   <div style={{ 
