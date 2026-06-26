@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Save, Trash, RefreshCw, Eye, EyeOff, Copy, Folder } from 'lucide-react';
+import { ArrowLeft, Save, Trash, RefreshCw, Eye, EyeOff, Copy, Folder, ExternalLink } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import api from '../api';
 
@@ -363,7 +363,32 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
 
             <div>
               <label>Website / App</label>
-              <input name="website" value={form.website} onChange={handleChange} placeholder="https://..." />
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input name="website" value={form.website} onChange={handleChange} placeholder="https://..." />
+                <button 
+                  className="btn btn-ghost" 
+                  onClick={() => {
+                    if (form.website) {
+                      const url = form.website.startsWith('http') ? form.website : `https://${form.website}`;
+                      window.open(url, '_blank');
+                    }
+                  }}
+                  disabled={!form.website}
+                  title="Open URL in new tab" 
+                  style={{ border: '1px solid var(--border-color)', flexShrink: 0 }}
+                >
+                  <ExternalLink size={18} />
+                </button>
+                <button 
+                  className="btn btn-ghost" 
+                  onClick={() => copyToClipboard(form.website, 'Website')} 
+                  disabled={!form.website}
+                  title="Copy website URL" 
+                  style={{ border: '1px solid var(--border-color)', flexShrink: 0 }}
+                >
+                  <Copy size={18} />
+                </button>
+              </div>
             </div>
           </>
         )}
