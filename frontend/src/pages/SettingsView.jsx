@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ShieldAlert, Clock, Download, Upload, AlertCircle } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import api from '../api';
+import { hashPassword } from '../crypto';
 
 export default function SettingsView() {
   const [timeoutMinutes, setTimeoutMinutes] = useState(15);
@@ -75,9 +76,12 @@ export default function SettingsView() {
     setChangePasswordError('');
 
     try {
+      const currentHashed = await hashPassword(currentPassword);
+      const newHashed = await hashPassword(newPassword);
+
       const response = await api.post('/change-password', {
-        current_password: currentPassword,
-        new_password: newPassword
+        current_password: currentHashed,
+        new_password: newHashed
       });
 
       addToast('✅ Master password changed successfully! Please log in again.', 'success');
@@ -127,9 +131,10 @@ export default function SettingsView() {
     setExportPasswordError('');
 
     try {
+      const hashedMaster = await hashPassword(exportPassword);
       // Request encrypted backup from backend
       const response = await api.post('/export', { 
-        master_password: exportPassword,
+        master_password: hashedMaster,
         passphrase: exportPassphrase
       }, {
         responseType: 'arraybuffer'
@@ -213,9 +218,11 @@ export default function SettingsView() {
       }
       const base64Data = btoa(binaryString);
 
+      const hashedMaster = await hashPassword(importPassword);
+
       // Send encrypted data to backend for import
       const response = await api.post('/import', {
-        master_password: importPassword,
+        master_password: hashedMaster,
         passphrase: importPassphrase,
         encrypted_data: base64Data
       });
@@ -255,7 +262,8 @@ export default function SettingsView() {
     setLoading(true);
     setDestroyError('');
     try {
-      await api.post('/destroy', { password: destroyPassword });
+      const hashed = await hashPassword(destroyPassword);
+      await api.post('/destroy', { password: hashed });
       localStorage.removeItem('vault_token');
       addToast('All data destroyed. Redirecting...', 'warning');
       setTimeout(() => navigate('/setup'), 1500);
