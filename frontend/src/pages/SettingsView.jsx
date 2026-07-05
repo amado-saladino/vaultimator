@@ -3,11 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { ShieldAlert, Clock, Download, Upload, AlertCircle } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import api from '../api';
-import { hashPassword } from '../crypto';
+import axios from 'axios';
+import { hashPassword, encryptBackup, decryptBackup, deriveFieldKey, encryptField, decryptField, setFieldKey } from '../crypto';
 
 export default function SettingsView() {
   const [timeoutMinutes, setTimeoutMinutes] = useState(15);
   const [destroyPassword, setDestroyPassword] = useState('');
+  const [destroyPasswordError, setDestroyPasswordError] = useState('');
   const [destroyError, setDestroyError] = useState('');
   const [showDestroyConfirm, setShowDestroyConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -132,18 +134,43 @@ export default function SettingsView() {
 
     try {
       const hashedMaster = await hashPassword(exportPassword);
-      // Request encrypted backup from backend
-      const response = await api.post('/export', { 
-        master_password: hashedMaster,
-        passphrase: exportPassphrase
-      }, {
-        responseType: 'arraybuffer'
+
+      // Authenticate with master password to get a fresh token
+      const tokenRes = await axios.post('/api/token', {
+        grant_type: 'password',
+        password: hashedMaster
       });
+      const freshToken = tokenRes.data.access_token;
 
-      // Create blob from encrypted binary data
-      const blob = new Blob([response.data], { type: 'application/octet-stream' });
+      // Fetch RAW vault data via axios directly (bypasses response interceptor)
+      // so that v1:... encrypted fields are preserved exactly as stored
+      const rawRes = await axios.get('/api/data', {
+        headers: { Authorization: `Bearer ${freshToken}` }
+      });
+      const rawVaultData = JSON.parse(JSON.stringify(rawRes.data));
 
-      // Create download link
+      // Derive the field key from the master password the user entered
+      const fieldKey = await deriveFieldKey(exportPassword);
+
+      // Decrypt all E2EE fields to plaintext so the backup is self-contained
+      for (const p of rawVaultData.passwords || []) {
+        p.password = await decryptField(fieldKey, p.password);
+        p.note     = await decryptField(fieldKey, p.note);
+      }
+      for (const n of rawVaultData.secret_notes || []) {
+        n.note = await decryptField(fieldKey, n.note);
+      }
+
+      // Construct and encrypt the backup with the passphrase
+      const backup = {
+        version: '1.0',
+        exported_at: new Date().toISOString(),
+        vault_data: rawVaultData
+      };
+      const encryptedBuffer = await encryptBackup(backup, exportPassphrase);
+
+      // Download the file
+      const blob = new Blob([encryptedBuffer], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -202,7 +229,7 @@ export default function SettingsView() {
     setImportError('');
 
     try {
-      // Read file as binary
+      // 1. Decrypt the backup file with the passphrase
       const fileContent = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => resolve(e.target.result);
@@ -210,33 +237,49 @@ export default function SettingsView() {
         reader.readAsArrayBuffer(importFile);
       });
 
-      // Convert binary to base64
-      const uint8Array = new Uint8Array(fileContent);
-      let binaryString = '';
-      for (let i = 0; i < uint8Array.length; i++) {
-        binaryString += String.fromCharCode(uint8Array[i]);
+      const backup = await decryptBackup(fileContent, importPassphrase);
+      if (!backup || !backup.vault_data) {
+        throw new Error('Invalid backup file format');
       }
-      const base64Data = btoa(binaryString);
 
+      // 2. Authenticate first so we have a valid session token
       const hashedMaster = await hashPassword(importPassword);
-
-      // Send encrypted data to backend for import
-      const response = await api.post('/import', {
-        master_password: hashedMaster,
-        passphrase: importPassphrase,
-        encrypted_data: base64Data
+      const tokenRes = await axios.post('/api/token', {
+        grant_type: 'password',
+        password: hashedMaster
       });
+      const freshToken = tokenRes.data.access_token;
+      localStorage.setItem('vault_token', freshToken);
 
-      // Update auth token if new one was provided
-      if (response.data.token) {
-        localStorage.setItem('vault_token', response.data.token);
+      // 3. Derive the field key from the plaintext import password and store it
+      //    in memory so the api interceptor uses it to encrypt fields on PUT.
+      const fieldKey = await deriveFieldKey(importPassword);
+      setFieldKey(fieldKey);
+
+      // 4. Strip any pre-existing v1: encryption from backup fields so they
+      //    arrive as plaintext — the api.put interceptor will re-encrypt them
+      //    with the correct key derived from importPassword.
+      const vaultData = backup.vault_data;
+      for (const p of vaultData.passwords || []) {
+        if (p.password?.startsWith('v1:')) p.password = await decryptField(fieldKey, p.password);
+        if (p.note?.startsWith('v1:'))     p.note     = await decryptField(fieldKey, p.note);
+      }
+      for (const n of vaultData.secret_notes || []) {
+        if (n.note?.startsWith('v1:')) n.note = await decryptField(fieldKey, n.note);
       }
 
-      addToast('✅ Vault imported successfully! Page will reload in 2 seconds...', 'success');
-      
-      // Refresh page to load imported data
+      // 5. Save via the normal api client — the request interceptor encrypts
+      //    all sensitive fields with the field key before sending.
+      await api.put('/data', vaultData);
+
+      addToast('✅ Vault imported successfully! Please log in again to load your vault.', 'success');
+
+      // 6. Clear session and field key, then redirect to login
+      setFieldKey(null);
+      localStorage.removeItem('vault_token');
+      localStorage.removeItem('vault_refresh_token');
       setTimeout(() => {
-        window.location.reload();
+        window.location.href = '/';
       }, 2000);
     } catch (err) {
       console.error('Import error:', err);
@@ -259,16 +302,25 @@ export default function SettingsView() {
   };
 
   const handleDestroy = async () => {
+    if (!destroyPassword.trim()) {
+      setDestroyPasswordError('Please enter your master password to confirm.');
+      return;
+    }
     setLoading(true);
     setDestroyError('');
+    setDestroyPasswordError('');
     try {
-      const hashed = await hashPassword(destroyPassword);
-      await api.post('/destroy', { password: hashed });
+      const hashedPassword = await hashPassword(destroyPassword);
+      await api.post('/destroy', { master_password: hashedPassword });
       localStorage.removeItem('vault_token');
       addToast('All data destroyed. Redirecting...', 'warning');
       setTimeout(() => navigate('/setup'), 1500);
     } catch (err) {
-      setDestroyError(err.response?.data?.error || 'Failed to destroy data.');
+      if (err.response?.status === 401) {
+        setDestroyPasswordError('Incorrect master password.');
+      } else {
+        setDestroyError(err.response?.data?.error || 'Failed to destroy data.');
+      }
       setLoading(false);
     }
   };
@@ -352,20 +404,11 @@ export default function SettingsView() {
                 </label>
                 <input 
                   type="password" 
-                  placeholder="Enter current password" 
+                  placeholder="Enter your current password" 
                   value={currentPassword}
                   onChange={(e) => {
                     setCurrentPassword(e.target.value);
                     setChangePasswordError('');
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      setShowChangePassword(false);
-                      setCurrentPassword('');
-                      setNewPassword('');
-                      setConfirmPassword('');
-                      setChangePasswordError('');
-                    }
                   }}
                   autoFocus
                   style={{ marginTop: '0.25rem' }}
@@ -707,36 +750,51 @@ export default function SettingsView() {
         </p>
 
         {!showDestroyConfirm ? (
-          <button className="btn btn-danger" onClick={() => setShowDestroyConfirm(true)}>
+          <button className="btn btn-danger" onClick={() => { setShowDestroyConfirm(true); setDestroyPassword(''); setDestroyPasswordError(''); setDestroyError(''); }}>
             Destroy All Data
           </button>
         ) : (
           <div className="animate-fade-in" style={{ padding: '1.5rem', backgroundColor: 'rgba(239, 68, 68, 0.05)', borderRadius: 'var(--border-radius-sm)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
             <p style={{ color: 'var(--accent-danger)', fontWeight: 600, marginBottom: '1rem' }}>
-              ⚠️ CRITICAL: This will permanently delete ALL data. Enter your master password to confirm.
+              ⚠️ CRITICAL: This will permanently delete ALL data. Are you sure?
             </p>
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                Enter your master password to confirm:
+              </label>
+              <input
+                type="password"
+                placeholder="Master password"
+                value={destroyPassword}
+                onChange={(e) => { setDestroyPassword(e.target.value); setDestroyPasswordError(''); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !loading && destroyPassword.trim()) handleDestroy();
+                  if (e.key === 'Escape') { setShowDestroyConfirm(false); setDestroyPassword(''); setDestroyPasswordError(''); setDestroyError(''); }
+                }}
+                autoFocus
+                style={{ marginTop: '0.25rem', borderColor: destroyPasswordError ? 'var(--accent-danger)' : undefined }}
+              />
+              {destroyPasswordError && (
+                <div style={{ color: 'var(--accent-danger)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+                  ❌ {destroyPasswordError}
+                </div>
+              )}
+            </div>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
-              <div style={{ flex: 1, minWidth: '200px' }}>
-                <input 
-                  type="password" 
-                  placeholder="Confirm Master Password" 
-                  value={destroyPassword}
-                  onChange={(e) => setDestroyPassword(e.target.value)}
-                  autoFocus
-                />
-                {destroyError && (
-                  <div style={{ color: 'var(--accent-danger)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{destroyError}</div>
-                )}
-              </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button className="btn btn-ghost" onClick={() => { setShowDestroyConfirm(false); setDestroyPassword(''); setDestroyError(''); }}>
+                <button className="btn btn-ghost" onClick={() => { setShowDestroyConfirm(false); setDestroyPassword(''); setDestroyPasswordError(''); setDestroyError(''); }} disabled={loading}>
                   Cancel
                 </button>
-                <button className="btn btn-danger" onClick={handleDestroy} disabled={loading || !destroyPassword}>
+                <button className="btn btn-danger" onClick={handleDestroy} disabled={loading || !destroyPassword.trim()}>
                   {loading ? 'Destroying...' : 'Confirm Destroy'}
                 </button>
               </div>
             </div>
+            {destroyError && (
+              <div style={{ color: 'var(--accent-danger)', fontSize: '0.8rem', marginTop: '0.75rem' }}>
+                ❌ {destroyError}
+              </div>
+            )}
           </div>
         )}
       </div>

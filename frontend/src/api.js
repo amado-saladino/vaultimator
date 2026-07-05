@@ -77,10 +77,33 @@ api.interceptors.response.use(
     
     return response;
   },
-  (error) => {
-    if (error.response && error.response.status === 401) {
-      // Clear token and redirect to login if session expired
+  async (error) => {
+    const originalRequest = error.config;
+    if (error.response && error.response.status === 401 && !originalRequest._retry && originalRequest.url !== '/token') {
+      originalRequest._retry = true;
+      const refreshToken = localStorage.getItem('vault_refresh_token');
+      
+      if (refreshToken) {
+        try {
+          const res = await axios.post('/api/token', {
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken
+          });
+          
+          localStorage.setItem('vault_token', res.data.access_token);
+          localStorage.setItem('vault_refresh_token', res.data.refresh_token);
+          
+          // Update the failed request with the new token
+          originalRequest.headers['Authorization'] = `Bearer ${res.data.access_token}`;
+          return api(originalRequest);
+        } catch (refreshError) {
+          // Refresh failed
+        }
+      }
+
+      // Clear tokens and redirect to login if session expired completely
       localStorage.removeItem('vault_token');
+      localStorage.removeItem('vault_refresh_token');
       window.dispatchEvent(new Event('session-expired'));
     }
     return Promise.reject(error);

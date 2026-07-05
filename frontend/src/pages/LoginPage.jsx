@@ -14,12 +14,16 @@ export default function LoginPage({ onLoginSuccess }) {
     setLoading(true);
     try {
       const hashed = await hashPassword(password);
-      const res = await api.post('/login', { password: hashed });
+      const res = await api.post('/token', { 
+        grant_type: 'password',
+        password: hashed 
+      });
       
       const key = await deriveFieldKey(password);
       setFieldKey(key);
       
-      localStorage.setItem('vault_token', res.data.token);
+      localStorage.setItem('vault_token', res.data.access_token);
+      localStorage.setItem('vault_refresh_token', res.data.refresh_token);
       onLoginSuccess();
     } catch (err) {
       setError(err.response?.data?.error || 'Invalid master password');

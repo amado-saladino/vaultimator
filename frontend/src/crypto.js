@@ -138,3 +138,64 @@ export async function decryptField(cryptoKey, encryptedText) {
     return "[[DECRYPTION_FAILED]]";
   }
 }
+
+// Backup encryption functions
+export async function deriveBackupKey(passphrase) {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(passphrase),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits", "deriveKey"]
+  );
+  
+  const salt = encoder.encode("vaultimator-backup-portable-salt-v1");
+  
+  return await crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: salt,
+      iterations: 100000,
+      hash: "SHA-256"
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"]
+  );
+}
+
+export async function encryptBackup(backupData, passphrase) {
+  const key = await deriveBackupKey(passphrase);
+  const encoder = new TextEncoder();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: iv },
+    key,
+    encoder.encode(JSON.stringify(backupData))
+  );
+  
+  const cipherBytes = new Uint8Array(encrypted);
+  const payload = new Uint8Array(iv.length + cipherBytes.length);
+  payload.set(iv, 0);
+  payload.set(cipherBytes, iv.length);
+  return payload.buffer;
+}
+
+export async function decryptBackup(encryptedBuffer, passphrase) {
+  const key = await deriveBackupKey(passphrase);
+  const payload = new Uint8Array(encryptedBuffer);
+  const iv = payload.slice(0, 12);
+  const cipherBytes = payload.slice(12);
+  
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: iv },
+    key,
+    cipherBytes
+  );
+  
+  const decoder = new TextDecoder();
+  return JSON.parse(decoder.decode(decrypted));
+}
