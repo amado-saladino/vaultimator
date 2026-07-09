@@ -110,14 +110,14 @@ export default function ItemDetail({ data, isNew, onUpdate }) {
 
   const generatePassword = async () => {
     try {
-      const res = await api.post('/generate', { 
-        length: passwordLength, 
-        include_upper: true, 
-        include_lower: true, 
-        include_numbers: true, 
-        include_special: true 
-      });
-      setForm({ ...form, password: res.data.password });
+      const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+~`|}{[]:;?><,./-=";
+      const array = new Uint32Array(passwordLength);
+      window.crypto.getRandomValues(array);
+      let password = '';
+      for (let i = 0; i < passwordLength; i++) {
+        password += charset[array[i] % charset.length];
+      }
+      setForm({ ...form, password: password });
       addToast(`✅ Password generated (${passwordLength} characters)`, 'success');
       setShowLengthPanel(false);
     } catch (err) {

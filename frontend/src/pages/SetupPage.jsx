@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Lock, ShieldCheck } from 'lucide-react';
 import api from '../api';
+import { hashPassword, validateMasterPassword } from '../crypto';
 
 export default function SetupPage({ onSetupComplete }) {
   const [password, setPassword] = useState('');
@@ -16,10 +17,17 @@ export default function SetupPage({ onSetupComplete }) {
       setError('Passwords do not match');
       return;
     }
+    
+    const validationError = validateMasterPassword(password);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
 
     setLoading(true);
     try {
-      await api.post('/setup', { password });
+      const hashed = await hashPassword(password);
+      await api.post('/setup', { password: hashed });
       onSetupComplete();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to setup master password');

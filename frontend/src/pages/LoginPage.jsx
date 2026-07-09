@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Lock, Unlock } from 'lucide-react';
 import api from '../api';
+import { hashPassword, deriveFieldKey, setFieldKey } from '../crypto';
 
 export default function LoginPage({ onLoginSuccess }) {
   const [password, setPassword] = useState('');
@@ -12,8 +13,17 @@ export default function LoginPage({ onLoginSuccess }) {
     setError('');
     setLoading(true);
     try {
-      const res = await api.post('/login', { password });
-      localStorage.setItem('vault_token', res.data.token);
+      const hashed = await hashPassword(password);
+      const res = await api.post('/token', { 
+        grant_type: 'password',
+        password: hashed 
+      });
+      
+      const key = await deriveFieldKey(password);
+      setFieldKey(key);
+      
+      localStorage.setItem('vault_token', res.data.access_token);
+      localStorage.setItem('vault_refresh_token', res.data.refresh_token);
       onLoginSuccess();
     } catch (err) {
       setError(err.response?.data?.error || 'Invalid master password');

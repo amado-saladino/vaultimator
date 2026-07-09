@@ -30,11 +30,25 @@ export default function Dashboard({ onLogout }) {
   const fetchData = async () => {
     try {
       const res = await api.get('/data');
-      setData({
+      
+      const loadedData = {
         folders: res.data.folders || [],
         passwords: res.data.passwords || [],
         secret_notes: res.data.secret_notes || [],
-      });
+      };
+      
+      setData(loadedData);
+
+      // Automatic Migration for Client-Side Encryption
+      if (res.data._needsMigration) {
+        addToast('Migrating old plaintext data to encrypted format...', 'warning');
+        try {
+          await api.put('/data', loadedData);
+          addToast('Data migration complete! Your vault is now End-to-End encrypted.', 'success');
+        } catch (err) {
+          addToast('Failed to migrate some data. Please save an item to retry.', 'error');
+        }
+      }
     } catch (err) {
       console.error(err);
     } finally {

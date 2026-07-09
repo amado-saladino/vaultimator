@@ -95,9 +95,7 @@ export default function VaultList({ data, searchQuery, activeFolder }) {
                 </div>
               </div>
             </div>
-            {item.type === 'password' && item.website && (
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{item.website}</div>
-            )}
+
           </div>
         ))}
       </div>
