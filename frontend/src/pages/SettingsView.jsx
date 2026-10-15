@@ -81,10 +81,55 @@ export default function SettingsView() {
       const currentHashed = await hashPassword(currentPassword);
       const newHashed = await hashPassword(newPassword);
 
-      const response = await api.post('/change-password', {
+      // Field-level (E2EE) encryption is keyed off the master password, so the
+      // stored fields must be re-encrypted with a key derived from the new one.
+      // Do all the decrypt/encrypt work first, so a wrong password or corrupted
+      // field aborts before anything is changed on the server.
+      const tokenRes = await axios.post('/api/token', {
+        grant_type: 'password',
+        password: currentHashed
+      });
+      const rawRes = await axios.get('/api/data', {
+        headers: { Authorization: `Bearer ${tokenRes.data.access_token}` }
+      });
+      const vaultData = JSON.parse(JSON.stringify(rawRes.data));
+
+      const oldKey = await deriveFieldKey(currentPassword);
+      const newKey = await deriveFieldKey(newPassword);
+      const reencrypt = async (value) => {
+        const plain = await decryptField(oldKey, value);
+        if (plain === '[[DECRYPTION_FAILED]]') {
+          throw new Error('Failed to decrypt existing vault items; password not changed');
+        }
+        return encryptField(newKey, plain);
+      };
+      for (const p of vaultData.passwords || []) {
+        p.password = await reencrypt(p.password);
+        p.note = await reencrypt(p.note);
+      }
+      for (const n of vaultData.secret_notes || []) {
+        n.note = await reencrypt(n.note);
+      }
+
+      await api.post('/change-password', {
         current_password: currentHashed,
         new_password: newHashed
       });
+
+      // Sessions are invalidated by the change; log in with the new password
+      // and save the re-encrypted items.
+      try {
+        const newTokenRes = await axios.post('/api/token', {
+          grant_type: 'password',
+          password: newHashed
+        });
+        await axios.put('/api/data', vaultData, {
+          headers: { Authorization: `Bearer ${newTokenRes.data.access_token}` }
+        });
+      } catch (saveErr) {
+        console.error('Re-encryption save error:', saveErr);
+        throw new Error('Password changed, but re-encrypting vault items failed. Restore from a backup.');
+      }
 
       addToast('✅ Master password changed successfully! Please log in again.', 'success');
       
